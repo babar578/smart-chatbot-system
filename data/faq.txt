@@ -1,0 +1,6 @@
+Campus FAQ
+WiFi name is CampusNet and the password is available from the admin office.
+The cafeteria serves lunch from 12pm to 3pm.
+Assignment submissions are due every Friday at 5pm.
+For technical help, email support@campus.edu.
+This chatbot answers from campus documents using RAG and a vector database.

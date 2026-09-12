@@ -1,0 +1,6 @@
+Campus Library
+The campus library opens at 9am and closes at 5pm, Monday to Friday.
+On Saturday the library is open from 10am to 2pm.
+The library is closed on Sunday.
+Students can borrow up to 3 books for 14 days.
+The quiet study hall is on the second floor.
