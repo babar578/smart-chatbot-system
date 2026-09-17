@@ -1,3 +1,13 @@
+"""
+Extract readable text from PDF bytes.
+
+Tries methods in order (fastest / cheapest first):
+  1. PyMuPDF text layer
+  2. pypdf text layer
+  3. Local OCR (RapidOCR) for scanned pages
+  4. OpenRouter vision model for hard image PDFs
+"""
+
 import base64
 import os
 import re
@@ -7,6 +17,7 @@ import pymupdf
 import requests
 from pypdf import PdfReader
 
+# PDF internals that look like words but are not real document content
 SKIP_WORDS = {
     "cid", "obj", "endobj", "stream", "endstream", "xref", "trailer",
     "startxref", "type", "font", "page", "pdf",
@@ -14,10 +25,15 @@ SKIP_WORDS = {
 
 
 def _clean(text):
+    """Collapse whitespace so previews stay tidy."""
     return " ".join((text or "").split())
 
 
 def _real_words(text):
+    """
+    Count words that look like real English (letters + a vowel).
+    Filters out PDF garbage so we know if extraction actually worked.
+    """
     words = re.findall(r"[A-Za-z]{3,}", text or "")
     good = []
     for word in words:
@@ -31,10 +47,12 @@ def _real_words(text):
 
 
 def _usable(text):
+    """True when extracted text has enough real words to be useful."""
     return len(_real_words(text)) >= 12
 
 
 def _extract_pymupdf(raw_bytes):
+    """Fast native PDF text extraction (best for normal text PDFs)."""
     doc = pymupdf.open(stream=raw_bytes, filetype="pdf")
     pages = [page.get_text("text") or "" for page in doc]
     doc.close()
@@ -42,18 +60,24 @@ def _extract_pymupdf(raw_bytes):
 
 
 def _extract_pypdf(raw_bytes):
+    """Fallback text extractor if PyMuPDF finds little/nothing."""
     reader = PdfReader(BytesIO(raw_bytes))
     pages = [page.extract_text() or "" for page in reader.pages]
     return "\n".join(pages).strip()
 
 
 def _extract_ocr(raw_bytes):
+    """
+    Render each page as an image and run local OCR.
+    Used for scanned / image-only PDFs when no text layer exists.
+    """
     from rapidocr_onnxruntime import RapidOCR
 
     ocr = RapidOCR()
     doc = pymupdf.open(stream=raw_bytes, filetype="pdf")
     page_texts = []
     for page in doc:
+        # Scale up (3x) so OCR can read small fonts more clearly
         pix = page.get_pixmap(matrix=pymupdf.Matrix(3, 3), alpha=False)
         result, _ = ocr(pix.tobytes("png"))
         if not result:
@@ -65,6 +89,10 @@ def _extract_ocr(raw_bytes):
 
 
 def _extract_vision(raw_bytes):
+    """
+    Last resort: send page images to a vision LLM via OpenRouter.
+    Limited to first 5 pages to control cost/time.
+    """
     api_key = (os.getenv("OPENROUTER_API_KEY") or "").strip()
     if not api_key:
         raise ValueError("OPENROUTER_API_KEY is required to read image PDFs.")
@@ -117,6 +145,10 @@ def _extract_vision(raw_bytes):
 
 
 def extract_pdf_text(raw_bytes):
+    """
+    Try extractors in order; return the first usable result.
+    Raises ValueError if none of the methods produce readable text.
+    """
     for method, extractor in (
         ("text", _extract_pymupdf),
         ("text", _extract_pypdf),
@@ -126,13 +158,14 @@ def extract_pdf_text(raw_bytes):
         try:
             text = extractor(raw_bytes)
         except Exception:
+            # Vision is the last step — surface its error; otherwise try next method
             if method == "vision":
                 raise
             continue
         if _usable(text):
             return {
                 "text": text,
-                "method": method,
+                "method": method,  # "text" | "ocr" | "vision" — shown in UI metadata
                 "words": len(_real_words(text)),
                 "preview": _clean(text)[:240],
             }

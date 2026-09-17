@@ -1,8 +1,16 @@
+/**
+ * React chat UI for the RAG chatbot.
+ * - Sidebar: list of chats (saved in localStorage)
+ * - Main: messages + file attach + send
+ * - Talks to Flask backend: POST /upload, POST /chat, DELETE /documents
+ */
 import { useEffect, useRef, useState } from 'react';
 import './App.css';
 
+// Key used to persist all chats in the browser
 const STORAGE_KEY = 'rag-chats-v1';
 
+/** Create an empty chat object (id is also used as backend chat_id). */
 function newChat() {
   return {
     id: crypto.randomUUID(),
@@ -39,6 +47,7 @@ function FileCard({ fileName, fileType, fileSize, words, onRemove }) {
   );
 }
 
+/** Load chats from localStorage, or start with one empty chat. */
 function loadChats() {
   try {
     const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
@@ -55,18 +64,21 @@ function App() {
   const [chats, setChats] = useState(loadChats);
   const [activeId, setActiveId] = useState(chats[0].id);
   const [input, setInput] = useState('');
-  const [pendingFile, setPendingFile] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [uploading, setUploading] = useState(false);
+  const [pendingFile, setPendingFile] = useState(null); // file chosen but not uploaded yet
+  const [loading, setLoading] = useState(false);         // waiting for /chat reply
+  const [uploading, setUploading] = useState(false);     // waiting for /upload
+  const [useWeb, setUseWeb] = useState(true);            // live website search for news/market
   const chatWindowRef = useRef(null);
   const fileRef = useRef(null);
 
   const activeChat = chats.find((chat) => chat.id === activeId) || chats[0];
 
+  // Keep chats in localStorage whenever they change
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(chats));
   }, [chats]);
 
+  // Auto-scroll to the latest message
   useEffect(() => {
     const el = chatWindowRef.current;
     if (el) {
@@ -74,6 +86,7 @@ function App() {
     }
   }, [activeChat?.messages, loading, uploading, activeId]);
 
+  /** Update only the currently open chat in state. */
   const updateActiveChat = (updater) => {
     setChats((prev) => prev.map((chat) => (
       chat.id === activeId ? updater(chat) : chat
@@ -104,9 +117,11 @@ function App() {
       }
       return remaining;
     });
+    // Also clear indexed documents for this chat on the backend
     fetch(`/documents?chat_id=${chatId}`, { method: 'DELETE' }).catch(() => {});
   };
 
+  /** Remember the selected file until the user hits Send. */
   const handleFilePick = (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -119,6 +134,7 @@ function App() {
     e.target.value = '';
   };
 
+  /** Upload file to Flask -> extract text -> store in Chroma for this chat_id. */
   const uploadFile = async (attachment, chatId) => {
     const formData = new FormData();
     formData.append('file', attachment.file);
@@ -134,6 +150,12 @@ function App() {
     return data;
   };
 
+  /**
+   * Send flow:
+   * 1) If a file is attached, upload it first
+   * 2) Show the user message in the thread
+   * 3) Call /chat and append the assistant reply (or error)
+   */
   const sendMessage = async (e) => {
     e.preventDefault();
     if (loading || uploading || !activeChat) return;
@@ -142,6 +164,7 @@ function App() {
     const attachment = pendingFile;
     if (!text && !attachment) return;
 
+    // If user only attached a file, ask for a summary by default
     const question = text || 'Summarize this document.';
     setInput('');
     setPendingFile(null);
@@ -157,6 +180,7 @@ function App() {
         setUploading(false);
       }
 
+      // First message sets the sidebar title
       const title = activeChat.title === 'New chat'
         ? (text || attachment.fileName).slice(0, 36)
         : activeChat.title;
@@ -183,10 +207,15 @@ function App() {
         ],
       }));
 
+      // Ask the backend (RAG and/or live web search + LLM) for an answer
       const response = await fetch('/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: question, chat_id: activeChat.id }),
+        body: JSON.stringify({
+          message: question,
+          chat_id: activeChat.id,
+          use_web: useWeb && !documents?.length,
+        }),
       });
       const data = await response.json().catch(() => ({}));
 
@@ -195,7 +224,12 @@ function App() {
           ...chat,
           messages: [
             ...chat.messages,
-            { role: 'assistant', content: data.reply, sources: data.sources || [] },
+            {
+              role: 'assistant',
+              content: data.reply,
+              sources: data.sources || [],
+              mode: data.mode,
+            },
           ],
         }));
       } else {
@@ -253,7 +287,7 @@ function App() {
           {!activeChat?.messages.length && !loading && (
             <div className="empty-state">
               <h2>What can I help with?</h2>
-              <p>Attach a file with +, then type your question and Send.</p>
+              <p>Ask current affairs with Search web on, or attach a file with +.</p>
             </div>
           )}
           <div className="chat-thread">
@@ -277,15 +311,41 @@ function App() {
                 {msg.content && (
                   <>
                     <span className="chat-bubble">{msg.content}</span>
+                    {msg.role === 'assistant' && msg.mode === 'web' && (
+                      <div className="chat-mode">Answered from live web search</div>
+                    )}
                     {msg.role === 'assistant' && msg.sources?.length > 0 && (
-                      <div className="chat-sources">Sources: {msg.sources.join(', ')}</div>
+                      <div className="chat-sources">
+                        Sources:{' '}
+                        {msg.sources.map((source, sourceIndex) => {
+                          const isUrl = /^https?:\/\//i.test(source);
+                          return (
+                            <span key={`${source}-${sourceIndex}`}>
+                              {sourceIndex > 0 ? ', ' : ''}
+                              {isUrl ? (
+                                <a href={source} target="_blank" rel="noreferrer">
+                                  {source}
+                                </a>
+                              ) : (
+                                source
+                              )}
+                            </span>
+                          );
+                        })}
+                      </div>
                     )}
                   </>
                 )}
               </div>
             ))}
             {uploading && <p className="chat-status">Uploading document...</p>}
-            {loading && !uploading && <p className="chat-status">Thinking...</p>}
+            {loading && !uploading && (
+              <p className="chat-status">
+                {useWeb && !activeChat?.documents?.length
+                  ? 'Searching the web...'
+                  : 'Thinking...'}
+              </p>
+            )}
           </div>
         </div>
 
@@ -302,6 +362,17 @@ function App() {
                   />
                 </div>
               )}
+              <div className="composer-options">
+                <label className="web-toggle" title="Search websites for news and market questions">
+                  <input
+                    type="checkbox"
+                    checked={useWeb}
+                    onChange={(e) => setUseWeb(e.target.checked)}
+                    disabled={loading || uploading}
+                  />
+                  Search web
+                </label>
+              </div>
               <div className="chat-form">
                 <input
                   ref={fileRef}
@@ -323,7 +394,13 @@ function App() {
                   type="text"
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
-                  placeholder={pendingFile ? 'Ask about this file...' : 'Ask anything'}
+                  placeholder={
+                    pendingFile
+                      ? 'Ask about this file...'
+                      : useWeb
+                        ? 'Ask current affairs or market news...'
+                        : 'Ask anything'
+                  }
                   disabled={loading}
                 />
                 <button

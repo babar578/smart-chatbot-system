@@ -167,10 +167,40 @@
 }
 
 .chat-sources,
+.chat-mode,
 .chat-status {
   margin-top: 6px;
   color: #6b6b6b;
   font-size: 12px;
+}
+
+.chat-sources a {
+  color: #0b57d0;
+  text-decoration: none;
+}
+
+.chat-sources a:hover {
+  text-decoration: underline;
+}
+
+.composer-options {
+  display: flex;
+  align-items: center;
+  padding: 4px 10px 2px;
+}
+
+.web-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #555;
+  cursor: pointer;
+  user-select: none;
+}
+
+.web-toggle input {
+  margin: 0;
 }
 
 .composer-wrap {

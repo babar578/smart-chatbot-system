@@ -6,4 +6,6 @@ chromadb
 pypdf
 pymupdf
 rapidocr-onnxruntime
+ddgs
+duckduckgo-search
 
